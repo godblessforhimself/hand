@@ -1,4 +1,7 @@
 ﻿import pickle, os, sys, inspect, thread, time, math, datetime
+from sklearn import svm
+import numpy as np
+from sklearn.multiclass import OneVsOneClassifier
 from time import sleep
 src_dir = os.path.dirname(inspect.getfile(inspect.currentframe()))
 arch_dir = '../lib/x64' if sys.maxsize > 2**32 else '../lib/x86'
@@ -54,10 +57,17 @@ class mlistener(Leap.Listener):
                                 if new.magnitude * old.magnitude==0:
                                     print i,j,new,old
                                 cos=old.dot(new)/old.magnitude/new.magnitude
-                                #这里存下关节的余弦值，是否应该换成角度？
-                                data[i][j-4+n]=cos
+                                if cos > 1:
+                                    cos=1
+                                if cos < -1:
+                                    cos=-1
+                                #这里存下关节的余弦值，换成角度
+                                data[i][j-4+n]=math.acos(cos) * 180 / math.pi
                         direction=finger.bone(1).next_joint-finger.bone(1).prev_joint
-                        data[i][n-1]=direction.normalized.to_tuple()
+                        #将direction 用两个角度alpha beta存储
+                        alpha=direction.yaw * 180 / math.pi
+                        beta=direction.roll * 180 / math.pi
+                        data[i][n-1]=[alpha,beta]
                     else:
                         print 'finger invalid'
             if data[VALID][RIGHT_HAND]:
@@ -80,10 +90,17 @@ class mlistener(Leap.Listener):
                                 old=finger.bone(j).next_joint-finger.bone(j).prev_joint
                                 new=finger.bone(j+1).next_joint-finger.bone(j+1).prev_joint
                                 cos=old.dot(new)/old.magnitude/new.magnitude
+                                if cos > 1:
+                                    cos=1
+                                if cos < -1:
+                                    cos=-1
                                 #这里存下关节的余弦值，是否应该换成角度？
-                                data[5+i][j-4+n]=cos
+                                data[5+i][j-4+n]=math.acos(cos) * 180 / math.pi
                         direction=finger.bone(1).next_joint-finger.bone(1).prev_joint
-                        data[5+i][n-1]=direction.normalized.to_tuple()
+                        #将direction 用两个角度alpha beta存储
+                        alpha=direction.yaw * 180 / math.pi
+                        beta=direction.roll * 180 / math.pi
+                        data[5+i][n-1]=[alpha,beta]
                         
             if self.filling==COLLECT_DATA:
                 self.buf.append([data,self.meaning])
@@ -128,11 +145,11 @@ class collect_data:
     #输入记录帧数，手语语义，按下enter开始记录，把信息保存到文件中
     def start_record(self):
         global ready
-        meaning = raw_input("输入手语语义")
-        num = input("输入记录帧数")
-        print "按下enter开始记录"
+        meaning = raw_input("input meaning")
+        num = input("num")
+        print "enter"
         sys.stdin.read(1)
-        print "开始记录..."
+        print "start..."
         self.listener.set_collect(num,meaning)
         begin=datetime.datetime.now()
         while 1:
@@ -142,20 +159,10 @@ class collect_data:
         end=datetime.datetime.now()
         print end-begin
         result=self.listener.process_data()
+        func = lambda x: [y for l in x for y in func(l)] if type(x) is list else [x]
+        result=func(result)#展开
         f=open(meaning,'w')
         pickle.dump(result,f)
-        f.close()
-    def merge_record(self,file1,file2):
-        #把两个手语数据合并成名为data的数据文件
-        f=open(file1,'r')
-        list1=pickle.load(f)
-        f.close()
-        f=open(file2,'r')
-        list2=pickle.load(f)
-        f.close()
-        l=[list1,list2]
-        f=open('data','w')
-        pickle.dump(l,f)
         f.close()
 class check_gesture:
     def __init__(self, datafile):
@@ -169,12 +176,41 @@ class check_gesture:
         sys.stdin.read(1)
         print "开始记录..."
         self.listener.set_check(num)
-    def calculate_gesture(self, data):
-        #Pi=eδ(EDi-ED1)ξk=ΣPi
+        
+def merge_record(self,dst,src):
+    #dst=dst+src 合并src到dst中
+    f=open(dst,'r')
+    list1=pickle.load(f)
+    f.close()
+    f=open(src,'r')
+    list2=pickle.load(f)
+    f.close()
+    list1.extend(list2)
+    f=open(dst,'w')
+    pickle.dump(list1,f)
+    f.close()
 def read_data(filename):
     f=open(filename,'r')
     obj=pickle.load(f)
     f.close()
     return obj
+def remove_label(filename,label):
+    l=read_data(filename)
+    out=list()
+    for it in l:
+        if it[1] != label:
+            out.append(it)
+    f=open(filename,'w')
+    pickle.dump(out,f)
+    f.close()
+def analyze(filename):
+    x_data=list()
+    y_label=list()
+    data=read_data(filename)
+    for data_item in data:
+        x_data.append([data_item[0:-1]])
+        y_label.append(data_item[-1])
+    CLF=OneVsOneClassifier(svm.SVC(gamma=0.0001,C=50,probability=True,random_state=0)).fit(x_data,y_label)
+    print CLF.score(x,y)
 if __name__ == '__main__':
     collecter = collect_data()
